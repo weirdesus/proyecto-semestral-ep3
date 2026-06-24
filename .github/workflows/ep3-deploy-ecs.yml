@@ -1,0 +1,72 @@
+name: EP3 Deploy ECS Fargate
+
+on:
+  push:
+    branches:
+      - ep3-ecs-fargate
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_FRONTEND: ep3-frontend
+  ECR_BACKEND_VENTAS: ep3-backend-ventas
+  ECR_BACKEND_DESPACHOS: ep3-backend-despachos
+  ECS_CLUSTER: ep3-cluster
+  ECS_FRONTEND_SERVICE: ep3-frontend-service
+  ECS_BACKEND_VENTAS_SERVICE: ep3-backend-ventas-service
+  ECS_BACKEND_DESPACHOS_SERVICE: ep3-backend-despachos-service
+
+jobs:
+  build-push-deploy:
+    name: Build, Push and Deploy to ECS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND:latest -f front_despacho/dockerfile front_despacho
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND:latest
+
+      - name: Build and push backend ventas image
+        run: |
+          docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_VENTAS:latest -f back-Ventas_SpringBoot/Springboot-API-REST/Dockerfile back-Ventas_SpringBoot/Springboot-API-REST
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_VENTAS:latest
+
+      - name: Build and push backend despachos image
+        run: |
+          docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_DESPACHOS:latest -f back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO/Dockerfile back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_DESPACHOS:latest
+
+      - name: Force new deployment in ECS
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_FRONTEND_SERVICE --force-new-deployment --region $AWS_REGION
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_BACKEND_VENTAS_SERVICE --force-new-deployment --region $AWS_REGION
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_BACKEND_DESPACHOS_SERVICE --force-new-deployment --region $AWS_REGION
+
+      - name: Wait for ECS services stability
+        run: |
+          aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_FRONTEND_SERVICE $ECS_BACKEND_VENTAS_SERVICE $ECS_BACKEND_DESPACHOS_SERVICE --region $AWS_REGION
+
+      - name: Deployment summary
+        run: |
+          echo "Deploy finalizado correctamente en ECS Fargate"
+          aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_FRONTEND_SERVICE $ECS_BACKEND_VENTAS_SERVICE $ECS_BACKEND_DESPACHOS_SERVICE \
+            --region $AWS_REGION \
+            --query "services[*].{Servicio:serviceName,Estado:status,Deseadas:desiredCount,Corriendo:runningCount,Pendientes:pendingCount}" \
+            --output table
